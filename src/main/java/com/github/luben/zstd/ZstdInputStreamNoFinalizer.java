@@ -215,6 +215,10 @@ public class ZstdInputStreamNoFinalizer extends FilterInputStream {
                 frameFinished = false;
             }
 
+            if (isClosed) {
+                throw new IOException("Stream closed");
+            }
+
             lastDstPos = dstPos;
             int size = decompressStream(stream, dst, dstSize, src, (int) srcSize);
 

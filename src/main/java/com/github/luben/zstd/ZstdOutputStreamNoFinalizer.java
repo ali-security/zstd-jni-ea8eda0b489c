@@ -402,7 +402,7 @@ public class ZstdOutputStreamNoFinalizer extends FilterOutputStream {
         }
         int srcSize = offset + len;
         srcPos = offset;
-        while (srcPos < srcSize) {
+        while (srcPos < srcSize && !isClosed) {
             int size = compressStream(stream, dst, dst.length, src, srcSize);
             if (Zstd.isError(size)) {
                 throw new ZstdIOException(size);
@@ -436,7 +436,7 @@ public class ZstdOutputStreamNoFinalizer extends FilterOutputStream {
                         throw new ZstdIOException(size);
                     }
                     out.write(dst, 0, (int) dstPos);
-                } while (size > 0);
+                } while (size > 0 && !isClosed);
                 frameClosed = true;
             } else {
                 // compress the remaining input
@@ -447,7 +447,7 @@ public class ZstdOutputStreamNoFinalizer extends FilterOutputStream {
                         throw new ZstdIOException(size);
                     }
                     out.write(dst, 0, (int) dstPos);
-                } while (size > 0);
+                } while (size > 0 && !isClosed);
             }
             out.flush();
         }
@@ -487,20 +487,23 @@ public class ZstdOutputStreamNoFinalizer extends FilterOutputStream {
                         throw new ZstdIOException(size);
                     }
                     out.write(dst, 0, (int) dstPos);
-                } while (size > 0);
+                } while (size > 0 && !isClosed);
             }
             if (closeParentStream) {
                 out.close();
             }
         } finally {
-            // release the resources even if underlying stream throw an exception
-            if (active_dict != null) {
-                active_dict.releaseSharedLock();
-                active_dict = null;
+            // a reentrant close() from out.write() above has already released everything
+            if (!isClosed) {
+                // release the resources even if underlying stream throw an exception
+                if (active_dict != null) {
+                    active_dict.releaseSharedLock();
+                    active_dict = null;
+                }
+                isClosed = true;
+                bufferPool.release(dstByteBuffer);
+                freeCStream(stream);
             }
-            isClosed = true;
-            bufferPool.release(dstByteBuffer);
-            freeCStream(stream);
         }
     }
 }

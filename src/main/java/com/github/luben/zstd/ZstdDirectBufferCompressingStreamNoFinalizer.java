@@ -106,8 +106,14 @@ public class ZstdDirectBufferCompressingStreamNoFinalizer implements Closeable, 
             initialized = true;
         }
         while (source.hasRemaining()) {
+            if (closed) {
+                throw new IOException("Stream closed");
+            }
             if (!target.hasRemaining()) {
                 target = flushBuffer(target);
+                if (closed) {
+                    throw new IOException("Stream closed");
+                }
                 if (!target.isDirect()) {
                     throw new IllegalArgumentException("Target buffer should be a direct buffer");
                 }
@@ -132,6 +138,9 @@ public class ZstdDirectBufferCompressingStreamNoFinalizer implements Closeable, 
         if (initialized) {
             long needed;
             do {
+                if (closed) {
+                    throw new IOException("Stream closed");
+                }
                 needed = flushStream(stream, target, target.position(), target.remaining());
                 if (Zstd.isError(needed)) {
                     throw new ZstdIOException(needed);
@@ -157,6 +166,9 @@ public class ZstdDirectBufferCompressingStreamNoFinalizer implements Closeable, 
                 if (initialized) {
                     long needed;
                     do {
+                        if (closed) {
+                            throw new IOException("Stream closed");
+                        }
                         needed = endStream(stream, target, target.position(), target.remaining());
                         if (Zstd.isError(needed)) {
                             throw new ZstdIOException(needed);
@@ -173,7 +185,9 @@ public class ZstdDirectBufferCompressingStreamNoFinalizer implements Closeable, 
                 }
             }
             finally {
-                freeCStream(stream);
+                if (!closed) {
+                    freeCStream(stream);
+                }
                 closed = true;
                 initialized = false;
                 target = null; // help GC with realizing the buffer can be released

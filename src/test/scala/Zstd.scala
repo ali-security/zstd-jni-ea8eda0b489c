@@ -1343,6 +1343,84 @@ class ZstdSpec extends AnyFlatSpec with ScalaCheckPropertyChecks {
     assert(output.sameElements(input))
   }
 
+  "ZstdOutputStreamNoFinalizer" should "stop using the native stream after a reentrant close from the wrapped stream" in {
+    val input = Array.tabulate[Byte](1024 * 1024)(i => ((i * 2654435761L) >>> 24).toByte)
+    var zos: ZstdOutputStreamNoFinalizer = null
+    var closes = 0
+    val out = new ByteArrayOutputStream() {
+      override def write(b: Array[Byte], off: Int, len: Int): Unit = {
+        super.write(b, off, len)
+        if (closes == 0) { closes += 1; zos.close() }
+      }
+    }
+    zos = new ZstdOutputStreamNoFinalizer(out, 1)
+    zos.write(input)
+    zos.close()
+    assertThrows[IOException] { zos.write(input) }
+
+    // the same reentrancy while close() itself is draining the frame must not free the native stream twice
+    closes = 0
+    val out2 = new ByteArrayOutputStream() {
+      override def write(b: Array[Byte], off: Int, len: Int): Unit = {
+        super.write(b, off, len)
+        if (closes == 0) { closes += 1; zos.close() }
+      }
+    }
+    zos = new ZstdOutputStreamNoFinalizer(out2, 1)
+    closes = 1
+    zos.write(input)
+    closes = 0
+    zos.close()
+    zos.close()
+  }
+
+  "ZstdInputStreamNoFinalizer" should "stop using the native stream after a reentrant close from the wrapped stream" in {
+    val compressed = Zstd.compress(Array.tabulate[Byte](1024 * 1024)(i => ((i * 2654435761L) >>> 24).toByte), 1)
+    var zis: ZstdInputStreamNoFinalizer = null
+    val in = new ByteArrayInputStream(compressed) {
+      override def read(b: Array[Byte], off: Int, len: Int): Int = {
+        val n = super.read(b, off, len)
+        zis.close()
+        n
+      }
+    }
+    zis = new ZstdInputStreamNoFinalizer(in)
+    val ex = intercept[IOException] { zis.read(new Array[Byte](4096), 0, 4096) }
+    assert(ex.getMessage == "Stream closed")
+  }
+
+  "ZstdDirectBufferCompressingStreamNoFinalizer" should "stop using the native stream after a reentrant close from flushBuffer" in {
+    val input = ByteBuffer.allocateDirect(1024 * 1024)
+    for (i <- 0 until input.capacity()) input.put(((i * 2654435761L) >>> 24).toByte)
+    var reenter = true
+    val zos: ZstdDirectBufferCompressingStreamNoFinalizer = new ZstdDirectBufferCompressingStreamNoFinalizer(ByteBuffer.allocateDirect(1024), 1) {
+      override protected def flushBuffer(toFlush: ByteBuffer): ByteBuffer = {
+        toFlush.clear()
+        if (reenter) { reenter = false; close() }
+        toFlush
+      }
+    }
+    input.flip()
+    val ex = intercept[IOException] { zos.compress(input) }
+    assert(ex.getMessage == "Stream closed")
+    zos.close()
+
+    // reentrant close while close() is draining the frame must not free the native stream twice
+    reenter = false
+    val zos2: ZstdDirectBufferCompressingStreamNoFinalizer = new ZstdDirectBufferCompressingStreamNoFinalizer(ByteBuffer.allocateDirect(1024), 1) {
+      override protected def flushBuffer(toFlush: ByteBuffer): ByteBuffer = {
+        toFlush.clear()
+        if (reenter) { reenter = false; close() }
+        toFlush
+      }
+    }
+    input.rewind()
+    zos2.compress(input)
+    reenter = true
+    try zos2.close() catch { case _: IOException => }
+    zos2.close()
+  }
+
   "streaming compression and decompression" should "roundtrip" in {
     Using.Manager { use =>
       val cctx = use(new ZstdCompressCtx())
