@@ -496,9 +496,30 @@ class ZstdDictSpec extends AnyFlatSpec {
       intercept[IllegalStateException] {
         ddict.close()
       }
-      // leaving multi-dict mode releases all but the last loaded dictionary
+      // leaving multi-dict mode does not drop them from the native ddictSet, so both stay in use
       zis.setRefMultipleDDicts(false)
+      intercept[IllegalStateException] {
+        ddict2.close()
+      }
+      intercept[IllegalStateException] {
+        ddict.close()
+      }
+      zis.close()
       ddict2.close()
+      ddict.close()
+    }
+
+    it should s"release only a replaced single-mode dict in ZstdInputStream with legacy $legacy" in {
+      val ddict = new ZstdDictDecompress(dict)
+      val ddict2 = new ZstdDictDecompress(dict2)
+      val zis = new ZstdInputStreamNoFinalizer(new ByteArrayInputStream(Zstd.compressUsingDict(input, dict, 1)))
+      zis.setDict(ddict2)
+      zis.setRefMultipleDDicts(true)
+      zis.setDict(ddict)
+      // ddict2 was replaced as the current dict and was never in the ddictSet
+      ddict2.close()
+      // ddict was loaded in multi-dict mode, so it stays in use after leaving it
+      zis.setRefMultipleDDicts(false)
       intercept[IllegalStateException] {
         ddict.close()
       }
