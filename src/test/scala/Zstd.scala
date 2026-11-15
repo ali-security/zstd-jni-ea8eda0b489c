@@ -1319,6 +1319,30 @@ class ZstdSpec extends AnyFlatSpec with ScalaCheckPropertyChecks {
     slicingPoolLatch.await();
   }
 
+  "ZstdOutputStream and ZstdInputStream" should "only use the capacity of undersized BufferPool buffers" in {
+    val smallPool = new BufferPool {
+      override def get(capacity: Int): ByteBuffer = ByteBuffer.allocate(Math.min(capacity, 512))
+      override def release(buffer: ByteBuffer): Unit = {}
+    }
+    val input = Array.tabulate[Byte](256 * 1024)(i => (i % 251 + i / 4096).toByte)
+    val os = new ByteArrayOutputStream()
+    val zos = new ZstdOutputStreamNoFinalizer(os, smallPool, 1)
+    zos.write(input)
+    zos.flush()
+    zos.close()
+    val zis = new ZstdInputStreamNoFinalizer(new ByteArrayInputStream(os.toByteArray), smallPool)
+    val output = new Array[Byte](input.length)
+    var pos = 0
+    var n = 0
+    while (pos < output.length && n >= 0) {
+      n = zis.read(output, pos, output.length - pos)
+      if (n > 0) pos += n
+    }
+    zis.close()
+    assert(pos == input.length)
+    assert(output.sameElements(input))
+  }
+
   "streaming compression and decompression" should "roundtrip" in {
     Using.Manager { use =>
       val cctx = use(new ZstdCompressCtx())
